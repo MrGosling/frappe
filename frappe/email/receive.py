@@ -12,7 +12,7 @@ import re
 import ssl
 import time
 from contextlib import suppress
-from email.header import decode_header
+from email.header import decode_header, make_header
 from urllib.parse import unquote
 
 import chardet
@@ -573,32 +573,44 @@ class Email:
 		# charset = self.get_charset(part)
 		fcontent = part.get_payload(decode=True)
 
-		if fcontent:
-			content_type = part.get_content_type()
-			fname = part.get_filename()
-			if fname:
-				try:
-					fname = fname.replace("\n", " ").replace("\r", "")
-					fname = cstr(decode_header(fname)[0][0])
-				except Exception:
-					fname = get_random_filename(content_type=content_type)
-			else:
-				fname = get_random_filename(content_type=content_type)
-			# Don't clobber existing filename
-			while fname in self.cid_map:
-				fname = get_random_filename(content_type=content_type)
+		if not fcontent:
+			return
 
-			self.attachments.append(
-				{
-					"content_type": content_type,
-					"fname": fname,
-					"fcontent": fcontent,
-				}
-			)
+		content_type = part.get_content_type()
+		raw_fname = part.get_filename()
 
-			cid = (cstr(part.get("Content-Id")) or "").strip("><")
-			if cid:
-				self.cid_map[fname] = cid
+		if raw_fname:
+			# Replace newlines and carriage returns with spaces
+			filename = raw_fname.replace("\n", " ").replace("\r", " ").strip()
+			try:
+				# decode_header returns a list of (decoded_string, charset) tuples.
+				# make_header combines these fragments into a Header object,
+				# which when converted to a string, correctly handles multi-part encoded filenames.
+				fname = str(make_header(decode_header(filename))).strip() or filename
+			except Exception:
+				# Fallback to the original filename if decoding fails
+				fname = filename or None
+		else:
+			fname = None
+
+		if not fname:
+			fname = get_random_filename(content_type=content_type)
+
+		# Ensure the filename is unique within this email's attachment list (CID map)
+		while fname in self.cid_map:
+			fname = get_random_filename(content_type=content_type)
+
+		self.attachments.append(
+			{
+				"content_type": content_type,
+				"fname": fname,
+				"fcontent": fcontent,
+			}
+		)
+
+		cid = (cstr(part.get("Content-Id")) or "").strip("<>")
+		if cid:
+			self.cid_map[fname] = cid
 
 	def save_attachments_in_doc(self, doc):
 		"""Save email attachments in given document."""
